@@ -8,19 +8,19 @@ public class Player : MonoBehaviour
 {
     private enum State
     {
-        Idle,
         Walking,
         Jumping,
         Falling,
         Dashing,
         LeftWall,
-        RightWall
+        RightWall,
+        Grounded
     }
-    private State state = State.Idle;
+    [SerializeField] private Cooldown cooldown;
+    private State state = State.Falling;
     public const float FRICTION = 0.1f;
     public const float FALL_MULTIPLIER = 6f;
     public const float JUMP_VELOCITY_FALLOFF = 2f;
-    private const float JUMP_COOLDOWN = 0.05f;
     public int maxJumps = 2;
     public float maxMovementVelocity = 10;
     public float movementAcceleration = 1;
@@ -28,7 +28,6 @@ public class Player : MonoBehaviour
     public int numJumps = 2;
     public float jumpForce = 13f;
     public Rigidbody2D rb;
-    private bool canJump = true;
 
     // grounded variables
     public LayerMask groundLayer;
@@ -49,58 +48,71 @@ public class Player : MonoBehaviour
     // Update is called once per frame
     void Update()
     {
+        state = getState();
+        Debug.Log("State: " + state);
         // Movement
         walk();
-
-        // Debug.Log("State: " + state);
-
         if (Input.GetKeyDown(KeyCode.Space)) { 
-            state = State.Jumping;
-            if (isOnWall()) {
-                if (state == State.LeftWall) {
-                    rb.velocity = new Vector2((float)(-jumpForce / 1.4), jumpForce);
-                }
-                else if (state == State.RightWall) {
-                    rb.velocity = new Vector2((float)(jumpForce / 1.4), jumpForce);
-                }
-            } else {
-                jump(); 
-            }
+            jump();
         }
-
-        // Debug.Log("Jumps: " + numJumps + " | Grounded: " + isGrounded());
-
+        if (Input.GetKeyDown(KeyCode.LeftShift) && rb.velocity.x != 0)
+        {
+            dash();
+        }
 
         if (rb.velocity.y < JUMP_VELOCITY_FALLOFF || rb.velocity.y > 0 && !Input.GetKey(KeyCode.Space))
         {
             rb.velocity += Vector2.up * Physics2D.gravity.y * FALL_MULTIPLIER * Time.deltaTime;
         }
 
-        if (Input.GetKeyDown(KeyCode.LeftShift) && rb.velocity.x != 0)
-        {
-            dash();
-        }
     }
 
     private void jump()
     {
-        if (isGrounded() && canJump)
-        {
+        if (cooldown.jumpCoolingDown) return;
+        if (state == State.Grounded || state == State.Walking) {
             numJumps = maxJumps;
-        }
-        if (numJumps > 0)
-        {
-            StartCoroutine(cooldownJump());
             rb.velocity = new Vector2(rb.velocity.x, 0);
             rb.AddForce(Vector2.up * jumpForce, ForceMode2D.Impulse);
-            numJumps--;
+            numJumps = maxJumps - 1;
+            return;
         }
+        if (numJumps <= 0) return;
+        switch (state)
+        {
+            case State.LeftWall:
+                rb.velocity = new Vector2((float)(-jumpForce / 1.2), jumpForce);
+                numJumps = maxJumps - 1;
+                break;
+            case State.RightWall:
+                rb.velocity = new Vector2((float)(jumpForce / 1.2), jumpForce);
+                numJumps = maxJumps - 1;
+                break;
+            case State.Jumping or State.Falling:
+                rb.velocity = new Vector2(rb.velocity.x, 0);
+                rb.AddForce(Vector2.up * jumpForce, ForceMode2D.Impulse);
+                numJumps--;
+                break;
+        }
+        cooldown.startCooldown(Cooldown.CooldownTypes.Jump);
+        state = State.Jumping;
     }
-    IEnumerator cooldownJump()
+
+    private State getState()
     {
-        canJump = false;
-        yield return new WaitForSeconds(JUMP_COOLDOWN);
-        canJump = true;
+        if (isGrounded())
+        {
+            return State.Grounded;
+        }
+        else if (rb.velocity.y > 0)
+        {
+            return State.Jumping;
+        }
+        else if (rb.velocity.y < 0)
+        {
+            return State.Falling;
+        }
+        return State.Walking;
     }
 
     private bool isGrounded()
@@ -112,13 +124,11 @@ public class Player : MonoBehaviour
     {
         if (Physics2D.Raycast(transform.position, -transform.right, castDistance, wallLayer))
         {
-            Debug.Log("Right Wall");
             state = State.RightWall;
             return true;
         }
         else if (Physics2D.Raycast(transform.position, transform.right, castDistance, wallLayer))
         {
-            Debug.Log("Left Wall");
             state = State.LeftWall;
             return true;
         }
@@ -127,8 +137,10 @@ public class Player : MonoBehaviour
 
     private void dash()
     {
+        if (cooldown.dashCoolingDown) return;
         Vector2 directionVector = new Vector2(Mathf.Sign(rb.velocity.x), 0);
         rb.AddForce(directionVector * dashForce, ForceMode2D.Impulse);
+        cooldown.startCooldown(Cooldown.CooldownTypes.Dash);
     }
 
     private void walk()
